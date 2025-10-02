@@ -2,12 +2,12 @@
 #SingleInstance Force
 
 ; --- ADMIN PRIVILEGES CHECK ---
-; This is required to run the silent installer and for the final script to function reliably.
+; This is required to reliably interact with the CMD window.
 if not A_IsAdmin {
     try {
         Run('*RunAs "' A_ScriptFullPath '"')
         ExitApp()
-    } catch {
+    } catch as e {
         MsgBox("This script requires Administrator privileges to function correctly.", "Admin Rights Required", "OK, Icon!")
         ExitApp()
     }
@@ -39,14 +39,11 @@ Return
 
 TurnOnContextMenu(*) {
     global EmbeddedScriptPath, AhkExePath
-    
-    AhkExePath := DetectAHKv2Exe() ; Check for an existing installation first.
-    
+    AhkExePath := DetectAHKv2Exe()
     if not AhkExePath {
         InstallLatestAHKv2()
-        AhkExePath := DetectAHKv2Exe() ; Re-detect after installation is complete.
+        AhkExePath := DetectAHKv2Exe()
     }
-    
     if AhkExePath {
         try {
             Run(Format('"{1}" "{2}"', AhkExePath, EmbeddedScriptPath))
@@ -65,7 +62,6 @@ TurnOffContextMenu(*) {
 }
 
 DetectAHKv2Exe() {
-    ; This function ONLY looks for the official installed version.
     pf_paths := [ A_ProgramFiles "\AutoHotkey\v2\AutoHotkey.exe", A_ProgramFiles "\AutoHotkey\AutoHotkey.exe" ]
     for path in pf_paths {
         if FileExist(path) {
@@ -78,50 +74,38 @@ DetectAHKv2Exe() {
 InstallLatestAHKv2() {
     TempSetupPath := A_Temp "\AHK_Official_Setup.exe"
     ApiUrl := "https://api.github.com/repos/AutoHotkey/AutoHotkey/releases/latest"
-
     InstallGui := Gui("+AlwaysOnTop -Caption +Border")
     InstallGui.SetFont("s11")
     InstallGui.Add("Text", , "AutoHotkey v2 not found. Installing…")
     InstallGui.Show("AutoSize Center NA")
-
     try {
         whr := ComObject("WinHttp.WinHttpRequest.5.1")
         whr.Open("GET", ApiUrl, true)
         whr.SetRequestHeader("User-Agent", "AutoHotkey-Installer-Script")
-        
-        ; --- THE FIX: Split the multi-command line into two separate lines ---
         whr.Send()
         whr.WaitForResponse()
-
         if (whr.Status != 200) {
             throw Error("Failed to contact GitHub API. Status: " whr.Status)
         }
-        
         SetupUrl := ""
         if RegExMatch(whr.ResponseText, '"browser_download_url":\s*"(?<url>[^"]+_setup\.exe)"', &match) {
             SetupUrl := match.url
         } else {
             throw Error("Could not find the official setup URL in the GitHub API response.")
         }
-        
         Download(SetupUrl, TempSetupPath)
-
         if not FileExist(TempSetupPath) {
             throw Error("The file failed to download.")
         }
-
-        RunWait('"' TempSetupPath '" /silent') 
-        Sleep(1500) ; Wait a moment for the file system to update.
-        
+        RunWait('"' TempSetupPath '" /silent')
+        Sleep(1500)
         FileDelete(TempSetupPath)
         InstallGui.Destroy()
-        
         if DetectAHKv2Exe() {
             MsgBox("AutoHotkey v2 installed successfully.", "Success", "OK")
         } else {
             MsgBox("Installation appeared to finish, but AutoHotkey.exe could not be found.`n`nPlease try installing it manually from autohotkey.com.", "Installation Error", "OK")
         }
-        
     } catch as e {
         InstallGui.Destroy()
         MsgBox("Installation failed: " e.Message, "Error", "OK")
@@ -130,7 +114,6 @@ InstallLatestAHKv2() {
 
 WriteEmbeddedScript() {
     global EmbeddedScriptPath
-    
     EmbeddedScript := ("
     ( LTrim
     #Requires AutoHotkey v2
@@ -150,28 +133,38 @@ WriteEmbeddedScript() {
     #HotIf WinActive("ahk_class ConsoleWindowClass") or WinActive("ahk_exe WindowsTerminal.exe")
 
     RButton:: {
-        global CMDContextMenuEnabled
         if !CMDContextMenuEnabled {
             Send("{RButton}")
             return
         }
         
-        BlockInput(true)
-        CoordMode "Mouse", "Screen"
-        MouseGetPos(&origX, &origY)
-        hWnd := WinExist("A")
-        WinGetPos(&winX, &winY, &winW, &winH, hWnd)
-        targetX := winX + winW - 150
-        targetY := winY + 10
-        MouseMove(targetX, targetY, 0)
-        Sleep(20)
-        Click "Right"
-        MouseMove(origX, origY, 0)
-        BlockInput(false)
+        ; --- THE DEFINITIVE 'SMART' BLOCKING HOTKEY ---
+
+        if GetKeyState("LButton", "P") {
+            ; If LButton is down, user is drag-selecting. Send a native click to copy.
+            Send("{RButton}")
+        } else {
+            ; If LButton is not down, this is a menu click.
+            
+            CoordMode "Mouse", "Screen"
+            MouseGetPos(&x, &y)
+
+            if InStr(WinGetTitle("A"), "Administrator") {
+                ; If it's an ADMIN window, use the Alt+Space method and move the menu.
+                Send("!{Space}")
+                Sleep(50) ; Wait for the menu to exist
+                hMenu := WinExist("ahk_class #32768")
+                if hMenu {
+                    WinMove(x, y, , , hMenu)
+                }
+            } else {
+                ; If it's a STANDARD window, use the reliable AppsKey method.
+                Send("{AppsKey}")
+            }
+        }
     }
 
     #HotIf
     )")
-
     FileOpen(EmbeddedScriptPath, "w", "UTF-8").Write(EmbeddedScript)
 }
